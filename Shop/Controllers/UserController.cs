@@ -5,8 +5,10 @@ using Microsoft.IdentityModel.Tokens;
 using Shop.Database;
 using Shop.Helpers;
 using Shop.Model.Models;
+using Shop.Model.Models.Dto;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Shop.Controllers
@@ -33,13 +35,23 @@ namespace Shop.Controllers
                 {
                 return BadRequest(new { Message = "Password is Incorect" });
             }
+            // Generate a new JWT token for the authenticated user
+            var token = GenerateJwtToken(user);
 
-            return Ok(new
+            // Update the user's token in the database
+            user.Token = token;
+            var newAccessToken = user.Token;
+            var newRefreshToken = RefreshToken();
+            userObj.RefreshToken = newRefreshToken;
+            userObj.RefreshTokenExpiryTime = DateTime.Now.AddDays(5);
+            await _myDbContext.SaveChangesAsync();
+
+            return Ok(new TokenApiDto()
             {
-                Token = user.Token,
-                Message = "Login Success!"
+                AccessToken = newAccessToken,
+                RefreshToken = newRefreshToken,
             });
-            
+
         }
 
         [HttpPost("register")]
@@ -50,17 +62,18 @@ namespace Shop.Controllers
             if (await CheckUsernameExists(userObj.UserName))
                 return BadRequest(new { Message = "Username already exists" });
             if (await CheckEmailExists(userObj.Email))
-                return BadRequest(new { Message = "Username already exists" });
+                return BadRequest(new { Message = "Email already exists" });
 
             userObj.Password = PasswordHasher.HashPassword(userObj.Password);
             userObj.Role = "User";
             userObj.Token = GenerateJwtToken(userObj);
             await _myDbContext.Users.AddAsync(userObj);
             await _myDbContext.SaveChangesAsync();
+
             return Ok(new
             {
                 Token = userObj.Token,
-                Message = "User Registered!"
+                Message = "Login Success!"
             });
         }
         [Authorize]
@@ -70,6 +83,28 @@ namespace Shop.Controllers
             return Ok(await _myDbContext.Users.ToListAsync());
         }
 
+        [HttpPost("refresh")]
+        public async Task<IActionResult> Refresh(TokenApiDto tokenApiDto)
+        {
+            if (tokenApiDto == null)
+                return BadRequest("Invalid Client");
+            string accessToken = tokenApiDto.AccessToken;
+            string refreshToken = tokenApiDto.RefreshToken;
+            var principal = GetPrincipalFromExpiresToken(accessToken);
+            var username = principal.Identity.Name;
+            var user = await _myDbContext.Users.FirstOrDefaultAsync(u => u.UserName == username);
+            if (user == null || user.RefreshToken != refreshToken || user.RefreshTokenExpiryTime <= DateTime.Now)
+                return BadRequest("Invalid Request");
+            var newAccessToken = GenerateJwtToken(user);
+            var newRefreshToken = RefreshToken();
+            user.RefreshToken = newRefreshToken;
+            await _myDbContext.SaveChangesAsync();
+            return Ok(new TokenApiDto()
+            {
+                AccessToken = newAccessToken,
+                RefreshToken = newRefreshToken,
+            });
+        }
         private async Task<bool> CheckUsernameExists(string userName)
         {
             return await _myDbContext.Users.AnyAsync<User>(x => x.UserName == userName);
@@ -89,7 +124,7 @@ namespace Shop.Controllers
             var idenitty = new ClaimsIdentity(new Claim[]
             {
                 new Claim(ClaimTypes.Role, user.Role),
-                new Claim(ClaimTypes.Name, $"{user.FirstName} {user.LastName}"),
+                new Claim(ClaimTypes.Name, $"{user.UserName}"),
             });
 
             // Create the token descriptor
@@ -108,6 +143,44 @@ namespace Shop.Controllers
 
             // Return the serialized token
             return tokenHandler.WriteToken(token);
+        }
+        private string RefreshToken()
+        {
+            var tokenBytes = RandomNumberGenerator.GetBytes(64);
+            var refreshToken = Convert.ToBase64String(tokenBytes);
+
+            var tokenInUser = _myDbContext.Users
+                .Any(x => x.RefreshToken == refreshToken);
+
+            if (tokenInUser)
+            {
+                return RefreshToken();
+            }
+            return refreshToken;
+        }
+
+        private ClaimsPrincipal GetPrincipalFromExpiresToken(string token)
+        {
+            var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes("ThisismysecretCode................."));
+
+            var tokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateAudience = false,
+                ValidateIssuer = false,
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = signingKey,
+                ValidateLifetime = false,
+            };
+            var tokenHandler = new JwtSecurityTokenHandler();
+            SecurityToken securityToken;
+            var principal = tokenHandler.ValidateToken(token, tokenValidationParameters, out securityToken);
+            var jwtSecurityToken = securityToken as JwtSecurityToken;    
+            if(jwtSecurityToken == null || !jwtSecurityToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256,StringComparison.InvariantCultureIgnoreCase))
+                 throw new SecurityTokenException("This is Invalid Token");
+
+            return principal;
+
+
         }
     }
 }

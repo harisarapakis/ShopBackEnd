@@ -13,6 +13,14 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowOrigin", builder =>
+        builder.AllowAnyOrigin()
+            .AllowAnyMethod()
+            .AllowAnyHeader());
+});
+
 builder.Services.AddDbContext<MyDbContext>(opt =>
 {
     opt.UseSqlServer(builder.Configuration.GetConnectionString("MyDbConnection"));
@@ -34,6 +42,10 @@ builder.Services.AddAuthentication(x =>
         ValidateIssuer = false
     };
 });
+
+
+
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
@@ -45,11 +57,16 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.UseCors(policy => policy.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin());
+//app.UseCors(policy => policy.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin());
+
+
+
+app.UseCors("AllowOrigin");
+
+app.UseAuthentication();
 
 app.UseAuthorization();
 
-app.UseAuthentication();
 
 app.MapControllers();
 

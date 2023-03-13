@@ -6,6 +6,7 @@ using Shop.Model.Models;
 
 namespace Shop.Controllers
 {
+    [Authorize]
     [ApiController]
     [Route("api/[controller]")]
     public class EmployeesController : Controller
